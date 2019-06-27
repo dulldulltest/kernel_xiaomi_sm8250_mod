@@ -2493,7 +2493,6 @@ static ssize_t ufshcd_clkgate_enable_store(struct device *dev,
 	spin_lock_irqsave(hba->host->host_lock, flags);
 	if (value == hba->clk_gating.is_enabled)
 		goto out;
-
 	if (value)
 		hba->clk_gating.active_reqs--;
 	else
