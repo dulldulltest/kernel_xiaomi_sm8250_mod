@@ -19,6 +19,12 @@ config TECHPACK_CAMERA_XIAOMI_TABLET
     help
       Xiaomi camera tablet
 
+config SUPPORT_ELISH_REC
+	bool "CONFIG_SUPPORT_ELISH_REC"
+	default n
+	help
+	   Let the elish device run normally with third-party recovery.
+
 endmenu
 
 endmenu
