@@ -5,7 +5,7 @@
 # Ensure the script exits on error
 set -e
 
-TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin
+TOOLCHAIN_PATH=$HOME/zyclang17/bin
 GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD)
 TARGET_DEVICE=$1
 
@@ -55,7 +55,7 @@ export PATH="/usr/lib/ccache:$PATH"
 echo "CCACHE_DIR: [$CCACHE_DIR]"
 
 
-MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
+MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip HOSTCC=clang HOSTCXX=clang++ LD=ld.lld"
 
 
 if [ "$1" == "j1" ]; then
