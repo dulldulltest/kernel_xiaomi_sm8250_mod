@@ -51,7 +51,7 @@ fi
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel" 
 export CC="ccache gcc"
 export CXX="ccache g++"
-export PATH="/usr/lib/ccache:$PATH"
+export PATH="$(which ccache):$PATH"
 echo "CCACHE_DIR: [$CCACHE_DIR]"
 
 
