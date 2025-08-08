@@ -40,7 +40,6 @@ static const char *f2fs_cp_reasons[NR_CP_REASON_TYPE] = {
 	"fastboot mode",
 	"log type is 2",
 	"dir needs recovery",
-	"dir xattr updated",
 };
 
 /*
