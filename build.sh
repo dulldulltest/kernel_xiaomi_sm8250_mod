@@ -49,22 +49,30 @@ fi
 
 # Enable ccache for speed up compiling 
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel" 
-export CC="ccache gcc"
-export CXX="ccache g++"
 export PATH="/usr/lib/ccache:$PATH"
 echo "CCACHE_DIR: [$CCACHE_DIR]"
 
 
-MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
+MAKE_ARGS=(
+	ARCH=arm64 
+	SUBARCH=arm64 
+	O=out 
+	"CC=ccache clang" 
+	"CXX=ccache clang++" 
+	CROSS_COMPILE=aarch64-linux-gnu- 
+	CROSS_COMPILE_ARM32=arm-linux-gnueabi- 
+	CROSS_COMPILE_COMPAT=arm-linux-gnueabi- 
+	CLANG_TRIPLE=aarch64-linux-gnu-
+)
 
 
 if [ "$1" == "j1" ]; then
-    make $MAKE_ARGS -j1
+    make ${MAKE_ARGS[@]} -j1
     exit
 fi
 
 if [ "$1" == "continue" ]; then
-    make $MAKE_ARGS -j$(nproc)
+    make ${MAKE_ARGS[@]} -j$(nproc)
     exit
 fi
 
@@ -118,7 +126,7 @@ sed -i "s/${local_version_str}/${local_version_date_str}/g" arch/arm64/configs/$
 # ------------- Building for AOSP -------------
 
 echo "Building for AOSP......"
-make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
+make "${MAKE_ARGS[@]}" ${TARGET_DEVICE}_defconfig
 
 if [ $KSU_ENABLE -eq 1 ]; then
     scripts/config --file out/.config \
@@ -144,7 +152,7 @@ else
     scripts/config --file out/.config -d KSU
 fi
 
-make $MAKE_ARGS -j$(nproc)
+make "${MAKE_ARGS[@]}" -j$(nproc)
 
 
 if [ -f "out/arch/arm64/boot/Image" ]; then
@@ -257,7 +265,7 @@ sed -i 's/\/\/39 01 00 00 01 00 03 51 03 FF/39 01 00 00 01 00 03 51 03 FF/g' ${d
 sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j2-p2-1-38-0c-0a-dsc-cmd.dtsi
 
 
-make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
+make "${MAKE_ARGS[@]}" ${TARGET_DEVICE}_defconfig
 
 if [ $KSU_ENABLE -eq 1 ]; then
     scripts/config --file out/.config \
@@ -313,7 +321,7 @@ scripts/config --file out/.config \
     -e MI_RECLAIM \
     -e RTMM \
 
-make $MAKE_ARGS -j$(nproc)
+make "${MAKE_ARGS[@]}" -j$(nproc)
 
 
 
