@@ -121,12 +121,12 @@ git clone https://github.com/liyafe1997/AnyKernel3 -b kona --single-branch --dep
 local_version_str="-perf"
 local_version_date_str="-$(date +%Y%m%d)-${GIT_COMMIT_ID}-perf"
 
-sed -i "s/${local_version_str}/${local_version_date_str}/g" arch/arm64/configs/${TARGET_DEVICE}_defconfig
-
 # ------------- Building for AOSP -------------
 
 echo "Building for AOSP......"
 make "${MAKE_ARGS[@]}" ${TARGET_DEVICE}_defconfig
+
+sed -i "s/${local_version_str}/${local_version_date_str}/g" out/.config
 
 if [ $KSU_ENABLE -eq 1 ]; then
     scripts/config --file out/.config \
@@ -267,6 +267,8 @@ sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${d
 
 make "${MAKE_ARGS[@]}" ${TARGET_DEVICE}_defconfig
 
+sed -i "s/${local_version_str}/${local_version_date_str}/g" out/.config
+
 if [ $KSU_ENABLE -eq 1 ]; then
     scripts/config --file out/.config \
     -e KSU \
@@ -358,9 +360,6 @@ cp out/arch/arm64/boot/Image anykernel/kernels/
 cp out/arch/arm64/boot/dtb anykernel/kernels/
 
 echo "Build for MIUI finished."
-
-# Restore local version string
-sed -i "s/${local_version_date_str}/${local_version_str}/g" arch/arm64/configs/${TARGET_DEVICE}_defconfig
 
 # ------------- End of Building for MIUI -------------
 #  If you don't need MIUI you can comment out the above block [Building for MIUI]
