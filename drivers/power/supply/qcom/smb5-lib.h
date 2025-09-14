@@ -16,10 +16,12 @@
 #include <linux/extcon-provider.h>
 #include <linux/usb/typec.h>
 #include "storm-watch.h"
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #include <linux/usb/usbpd.h>
 #include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/of_gpio.h>
+#endif
 #include "battery.h"
 
 enum print_reason {
@@ -29,7 +31,9 @@ enum print_reason {
 	PR_PARALLEL	= BIT(3),
 	PR_OTG		= BIT(4),
 	PR_WLS		= BIT(5),
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	PR_OEM		= BIT(6),
+#endif
 };
 
 #define DEFAULT_VOTER			"DEFAULT_VOTER"
@@ -62,9 +66,11 @@ enum print_reason {
 #define PL_FCC_LOW_VOTER		"PL_FCC_LOW_VOTER"
 #define WBC_VOTER			"WBC_VOTER"
 #define HW_LIMIT_VOTER			"HW_LIMIT_VOTER"
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define CHG_AWAKE_VOTER			"CHG_AWAKE_VOTER"
 #define DC_AWAKE_VOTER			"DC_AWAKE_VOTER"
 #define DC_PLUGOUT_WIRELESS_VOTER	"DC_PLUGOUT_WIRELESS_VOTER"
+#endif
 #define PL_SMB_EN_VOTER			"PL_SMB_EN_VOTER"
 #define FORCE_RECHARGE_VOTER		"FORCE_RECHARGE_VOTER"
 #define LPD_VOTER			"LPD_VOTER"
@@ -73,7 +79,9 @@ enum print_reason {
 #define JEITA_ARB_VOTER			"JEITA_ARB_VOTER"
 #define MOISTURE_VOTER			"MOISTURE_VOTER"
 #define HVDCP2_ICL_VOTER		"HVDCP2_ICL_VOTER"
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define HVDCP2_FCC_VOTER		"HVDCP2_FCC_VOTER"
+#endif
 #define HVDCP2_12V_ICL_VOTER		"HVDCP2_12V_ICL_VOTER"
 #define AICL_THRESHOLD_VOTER		"AICL_THRESHOLD_VOTER"
 #define USBOV_DBC_VOTER			"USBOV_DBC_VOTER"
@@ -88,10 +96,14 @@ enum print_reason {
 #define MAIN_FCC_VOTER			"MAIN_FCC_VOTER"
 #define DCIN_AICL_VOTER			"DCIN_AICL_VOTER"
 #define WLS_PL_CHARGING_VOTER		"WLS_PL_CHARGING_VOTER"
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define OTG_VOTER                       "OTG_VOTER"
+#endif
 #define ICL_CHANGE_VOTER		"ICL_CHANGE_VOTER"
 #define OVERHEAT_LIMIT_VOTER		"OVERHEAT_LIMIT_VOTER"
 #define TYPEC_SWAP_VOTER		"TYPEC_SWAP_VOTER"
+
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define SW_DISABLE_DC_VOTER     "SW_DISABLE_DC_VOTER"
 #define CLASSA_QC_FCC_VOTER		"CLASSA_QC_FCC_VOTER"
 #define QC_A_CP_ICL_MAX_VOTER		"QC_A_CP_ICL_MAX_VOTER"
@@ -104,14 +116,11 @@ enum print_reason {
 /* use for QC3P5 */
 #define QC3P5_VOTER			"QC3P5_VOTER"
 #define FCC_MAX_QC3P5_VOTER		"FCC_MAX_QC3P5_VOTER"
-#define NON_PPS_PD_FCC_VOTER		"NON_PPS_PD_FCC_VOTER"
 
 /* thermal micros */
 #define MAX_TEMP_LEVEL		16
 /* defined for distinguish qc class_a and class_b */
 #define VOL_THR_FOR_QC_CLASS_AB		12400000
-#define VOL_THR_FOR_QC_CLASS_AB_DAGU	12300000
-#define VOL_THR_FOR_QC_CLASS_AB_PSYCHE	12300000
 #define COMP_FOR_LOW_RESISTANCE_CABLE	100000
 #define QC_CLASS_A_CURRENT_UA		3600000
 #define HVDCP_CLASS_A_MAX_UA		2500000
@@ -119,10 +128,12 @@ enum print_reason {
 #define MAX_PULSE			38
 #define MAX_PLUSE_COUNT_ALLOWED		30
 #define HIGH_NUM_PULSE_THR		12
+#endif
 
 #define BOOST_BACK_STORM_COUNT	3
 #define WEAK_CHG_STORM_COUNT	8
 
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define MAX_QC3P5_PLUSE_COUNT_ALLOWED		230
 #define QC3P5_DP_RAPIDLY_TUNE_ALLOWED		120
 #define QC3P5_DP_RAPIDLY_TUNE_PULSE		10
@@ -133,35 +144,33 @@ enum print_reason {
 #define HVDCP2_CURRENT_UA		1400000
 /* defined for un_compliant Type-C cable */
 #define CC_UN_COMPLIANT_START_DELAY_MS	700
+#endif
 
 #define VBAT_TO_VRAW_ADC(v)		div_u64((u64)v * 1000000UL, 194637UL)
 
 #define ITERM_LIMITS_PMI632_MA		5000
 #define ITERM_LIMITS_PM8150B_MA		10000
 #define ADC_CHG_ITERM_MASK		32767
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define BAT_TEMP_COLD			0
 #define BAT_TEMP_TOO_HOT		580
+#endif
 
 #define SDP_100_MA			100000
 #define SDP_CURRENT_UA			500000
 #define CDP_CURRENT_UA			1500000
-
-#ifdef CONFIG_QPNP_SMB5_DAGU
-#define DCP_CURRENT_UA			2000000
-#else
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define DCP_CURRENT_UA			1600000
-#endif
-
-#ifdef CONFIG_RX1619_REMOVE
-#define HVDCP_START_CURRENT_UA		500000
-#else
-#define HVDCP_START_CURRENT_UA          1000000
-#endif
-
+#define HVDCP_START_CURRENT_UA		1000000
 #define HVDCP_CURRENT_UA		2800000
+#else
+#define DCP_CURRENT_UA			1500000
+#define HVDCP_CURRENT_UA		3000000
+#endif
 #define TYPEC_DEFAULT_CURRENT_UA	900000
 #define TYPEC_MEDIUM_CURRENT_UA		1500000
 #define TYPEC_HIGH_CURRENT_UA		3000000
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 #define HVDCP3P5_40W_CURRENT_UA		4000000
 #define PD_UNVERIFED_CURRENT		4800000
 #define FLOAT_CHARGER_UA		1000000
@@ -172,11 +181,13 @@ enum print_reason {
 #define WIRELESS_BY_USB_IN_VOTER		"WIRELESS_BY_USB_IN_VOTER"
 
 #define ADC_CHG_TERM_MASK		32767
+#endif
 #define DCIN_ICL_MIN_UA			100000
 #define DCIN_ICL_MAX_UA			1500000
 #define DCIN_ICL_STEP_UA		100000
 #define ROLE_REVERSAL_DELAY_MS		500
 
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 /* six pin new battery step charge micros */
 #define MAX_STEP_ENTRIES			3
 #define MAX_COUNT_OF_IBAT_STEP			2
@@ -203,10 +214,7 @@ enum print_reason {
 
 #define QC3P5_CHARGER_ICL	2000000
 
-// smart battery
-#define SMART_BATTERY_FV   "SMART_BATTERY_FV"
-
-#ifndef CONFIG_FUEL_GAUGE_BQ27Z561_MUNCH
+#ifndef CONFIG_FUEL_GAUGE_BQ27Z561
 #define ESR_WORK_VOTER			"ESR_WORK_VOTER"
 #define ESR_WORK_TIME_2S	2000
 #define ESR_WORK_TIME_97S	97000
@@ -247,7 +255,6 @@ enum esr_work_status {
 #define ADAPTER_XIAOMI_PD_40W 0x0c
 #define ADAPTER_XIAOMI_PD_50W 0x0e
 #define ADAPTER_XIAOMI_PD_60W 0x0f
-#define ADAPTER_XIAOMI_PD_100W 0x10
 #define ADAPTER_VOICE_BOX 0x0d
 
 /* defined for charger type recheck */
@@ -273,27 +280,14 @@ enum quick_charge_type {
 	QUICK_CHARGE_FAST,
 	QUICK_CHARGE_FLASH,
 	QUICK_CHARGE_TURBE,
-	QUICK_CHARGE_SUPER,
 	QUICK_CHARGE_MAX,
-};
-
-enum apdo_max_power {
-	APDO_MAX_30W = 30, // J2 G7A F4 and some old projects use 30W pps charger
-	APDO_MAX_33W = 33,   // most 33W project use 33w pps charger
-	APDO_MAX_40W = 40,   // only F1X use 40w pps charger
-	APDO_MAX_50W = 50,   // only j1(cmi project) use 50W pps(device support maxium 50w)
-	APDO_MAX_55W =55, // K2 K9B use 55w pps charger
-	APDO_MAX_65W = 65, //we have 65w pps which for j1(cmi), and also used for 120w(67w works in 65w)
-	APDO_MAX_67W = 67, //most useage now for dual charge pumps projects such as L3 L1 L1A L18
-	APDO_MAX_100W = 100, // Zimi car quick charger have 100w pps
-	APDO_MAX_120W = 120, // L2 L10 and K8 L11 use 120W
-	APDO_MAX_INVALID = 67,
 };
 
 struct quick_charge {
 	enum power_supply_type adap_type;
 	enum quick_charge_type adap_cap;
 };
+#endif
 
 enum smb_mode {
 	PARALLEL_MASTER = 0,
@@ -486,18 +480,22 @@ enum icl_override_mode {
 	SW_OVERRIDE_USB51_MODE,
 	/* ICL other than USB51 */
 	SW_OVERRIDE_HC_MODE,
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	/* add NO CC MODE*/
 	SW_OVERRIDE_NO_CC_MODE,
+#endif
 };
 
 /* EXTCON_USB and EXTCON_USB_HOST are mutually exclusive */
 static const u32 smblib_extcon_exclusive[] = {0x3, 0};
 
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 /* six pin battery data struct */
 struct six_pin_step_data {
 	u32 vfloat_step_uv;
 	u32 fcc_step_ua;
 };
+#endif
 
 struct smb_regulator {
 	struct regulator_dev	*rdev;
@@ -584,15 +582,20 @@ struct smb_charger {
 	struct smb_chg_freq	chg_freq;
 	int			otg_delay_ms;
 	int			weak_chg_icl_ua;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			thermal_fcc_override;
+#endif
 	u32			sdam_base;
 	bool			pd_not_supported;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	bool			batt_verified;
+#endif
 
 	/* locks */
 	struct mutex		smb_lock;
 	struct mutex		ps_change_lock;
 	struct mutex		irq_status_lock;
+	struct mutex		moisture_detection_enable;
 	struct mutex		dcin_aicl_lock;
 	spinlock_t		typec_pr_lock;
 	struct mutex		adc_lock;
@@ -604,34 +607,35 @@ struct smb_charger {
 	struct power_supply		*usb_psy;
 	struct power_supply		*dc_psy;
 	struct power_supply		*bms_psy;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct power_supply		*bbc_psy;
 	struct power_supply_desc		usb_psy_desc;
+#endif
 	struct power_supply		*usb_main_psy;
 	struct power_supply		*usb_port_psy;
 	struct power_supply		*wls_psy;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct power_supply		*idtp_psy;
 	struct power_supply		*wireless_psy;
 	struct power_supply		*wls_chip_psy;
 	struct power_supply		*wip_psy;
 	struct power_supply		*ln_psy;
 	struct power_supply		*cp_chip_psy;
+#endif
 	struct power_supply		*cp_psy;
-	struct power_supply             *cp_sec_psy;
-	struct power_supply             *ps_psy;
 #ifdef CONFIG_BATT_VERIFY_BY_DS28E16
 	struct power_supply		*batt_verify_psy;
 #endif
 	enum power_supply_type		real_charger_type;
-	enum power_supply_type		wireless_charger_type;
-	enum power_supply_type		quick_charge_type_info;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
+	enum power_supply_type          wireless_charger_type;
+#endif
 
 	/* notifiers */
 	struct notifier_block	nb;
 
 	/* parallel charging */
 	struct parallel_params	pl;
-	int smartBatVal;
-	int	mtbf_current; // mtbf test
 
 	/* CC Mode */
 	int	adapter_cc_mode;
@@ -648,9 +652,11 @@ struct smb_charger {
 	struct typec_partner	*typec_partner;
 	struct typec_partner_desc typec_partner_desc;
 
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct pinctrl *smb5_pinctrl;
 	struct pinctrl_state *smb5_gpio_active;
 	struct pinctrl_state *smb5_gpio_suspend;
+#endif
 
 	/* votables */
 	struct votable		*dc_suspend_votable;
@@ -672,7 +678,9 @@ struct smb_charger {
 	struct votable		*qnovo_disable_votable;
 
 	/* work */
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct work_struct	batt_update_work;
+#endif
 	struct work_struct	bms_update_work;
 	struct work_struct	pl_update_work;
 	struct work_struct	jeita_update_work;
@@ -680,13 +688,17 @@ struct smb_charger {
 	struct work_struct	chg_termination_work;
 	struct work_struct	dcin_aicl_work;
 	struct work_struct	cp_status_change_work;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct work_struct	batt_verify_update_work;
 	struct work_struct	plugin_check_time_work;
 	struct delayed_work	fake_plug_out_check_work;
+#endif
 	struct delayed_work	ps_change_timeout_work;
 	struct delayed_work	clear_hdc_work;
 	struct delayed_work	icl_change_work;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct delayed_work	dc_power_work;
+#endif
 	struct delayed_work	pl_enable_work;
 	struct delayed_work	uusb_otg_work;
 	struct delayed_work	bb_removal_work;
@@ -694,17 +706,22 @@ struct smb_charger {
 	struct delayed_work	lpd_detach_work;
 	struct delayed_work	thermal_regulation_work;
 	struct delayed_work	usbov_dbc_work;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct delayed_work	six_pin_batt_step_chg_work;
+#endif
 	struct delayed_work	pr_swap_detach_work;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct delayed_work	reg_work;
 	struct delayed_work	thermal_setting_work;
-#ifndef CONFIG_FUEL_GAUGE_BQ27Z561_MUNCH
+#ifndef CONFIG_FUEL_GAUGE_BQ27Z561
 	struct delayed_work	reduce_fcc_work;
 #endif
 	struct delayed_work	charger_type_recheck;
 	struct delayed_work	raise_qc3_vbus_work;
+#endif
 	struct delayed_work	pr_lock_clear_work;
 	struct delayed_work	role_reversal_check;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	struct delayed_work	conn_therm_work;
 	struct delayed_work	after_ffc_chg_dis_work;
 	struct delayed_work	after_ffc_chg_en_work;
@@ -715,6 +732,7 @@ struct smb_charger {
 	struct delayed_work	cc_un_compliant_charge_work;
 	struct delayed_work	clean_cp_to_sw_work;
 	struct delayed_work     check_init_boot;
+#endif
 
 	struct alarm		lpd_recheck_timer;
 	struct alarm		moisture_protection_alarm;
@@ -735,12 +753,16 @@ struct smb_charger {
 	int			voltage_min_uv;
 	int			voltage_max_uv;
 	int			pd_active;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			apdo_max;
+#endif
 	bool			pd_hard_reset;
 	bool			pr_lock_in_progress;
 	bool			pr_swap_in_progress;
 	bool			early_usb_attach;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	bool			early_dc_attach;
+#endif
 	bool			ok_to_pd;
 	bool			typec_legacy;
 	bool			typec_irq_en;
@@ -751,6 +773,7 @@ struct smb_charger {
 	int			boost_threshold_ua;
 	int			system_temp_level;
 	int			thermal_levels;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			dc_temp_level;
 	int			dc_thermal_levels;
 	int			pps_thermal_level;
@@ -769,11 +792,11 @@ struct smb_charger {
 	int 		*thermal_mitigation_bpp_qc2;
 	int 		*thermal_mitigation_bpp;
 	int 		*thermal_mitigation_dc_20W;
+#endif
 	int			*thermal_mitigation;
 	int			dcp_icl_ua;
 	int			fake_capacity;
 	int			fake_batt_status;
-	bool			chg_enable_k11a;
 	bool			step_chg_enabled;
 	bool			sw_jeita_enabled;
 	bool			jeita_arb_enable;
@@ -798,10 +821,14 @@ struct smb_charger {
 	bool			use_extcon;
 	bool			otg_present;
 	bool			hvdcp_disable;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	bool			fake_hvdcp3;
+#endif
 	int			hw_max_icl_ua;
 	int			auto_recharge_soc;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			auto_recharge_vbat;
+#endif
 	enum sink_src_mode	sink_src_mode;
 	enum power_supply_typec_power_role power_role;
 	enum jeita_cfg_stat	jeita_configured;
@@ -816,7 +843,6 @@ struct smb_charger {
 	int			smb_temp;
 	int			skin_temp;
 	int			connector_temp;
-	int			connector_temp_pre;
 	int			thermal_status;
 	int			main_fcc_max;
 	u32			jeita_soft_thlds[2];
@@ -824,6 +850,7 @@ struct smb_charger {
 	int			jeita_soft_fcc[2];
 	int			jeita_soft_fv[2];
 	bool			moisture_present;
+	bool			moisture_detection_enabled;
 	bool			uusb_moisture_protection_capable;
 	bool			uusb_moisture_protection_enabled;
 	bool			hw_die_temp_mitigation;
@@ -843,10 +870,14 @@ struct smb_charger {
 	int			term_vbat_uv;
 	int			usbin_forced_max_uv;
 	int			init_thermal_ua;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			pd_verifed;
+#endif
 	u32			comp_clamp_level;
 	int			wls_icl_ua;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			capacity;
+#endif
 	int			cutoff_count;
 	bool			dcin_aicl_done;
 	bool			hvdcp3_standalone_config;
@@ -861,11 +892,13 @@ struct smb_charger {
 	int                     qc2_max_pulses;
 	enum qc2_non_comp_voltage qc2_unsupported_voltage;
 	bool			dbc_usbov;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	bool			qc2_unsupported;
 	bool			no_raise_vbus_status;
 	bool			vbus_rising;
 	bool			fake_plug_out;
 	bool			cp_to_sw_status;
+#endif
 
 	/* extcon for VBUS / ID notification to USB for uUSB */
 	struct extcon_dev	*extcon;
@@ -873,7 +906,9 @@ struct smb_charger {
 	/* battery profile */
 	int			batt_profile_fcc_ua;
 	int			batt_profile_fv_uv;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			non_fcc_batt_profile_fv_uv;
+#endif
 
 	int			usb_icl_delta_ua;
 	int			pulse_cnt;
@@ -890,6 +925,7 @@ struct smb_charger {
 	u32			irq_status;
 
 	/* wireless */
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			flag_dc_present;
 	int			power_good_en;
 	int			fake_dc_on;
@@ -898,13 +934,10 @@ struct smb_charger {
 	int64_t			rpp;
 	int64_t			cep;
 	int64_t			tx_bt_mac;
-	int64_t			pen_bt_mac;
 	int64_t oob_rpp_msg_cnt;
 	int64_t oob_cep_msg_cnt;
 	int			reverse_chg_state;
-	int			reverse_pen_chg_state;
 	int			reverse_gpio_state;
-	int			wls_car_adapter;
 
 	/* product related */
 	bool			support_wireless;
@@ -933,13 +966,15 @@ struct smb_charger {
 
 	int			chg_warm_threshold;
 	int			chg_cool_threshold;
+#endif
 	int			dcin_uv_count;
 	ktime_t			dcin_uv_last_time;
 	int			last_wls_vout;
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 	int			fake_conn_temp;
 	u64			entry_time;
 	int			entry_connector_therm;
-#ifndef CONFIG_FUEL_GAUGE_BQ27Z561_MUNCH
+#ifndef CONFIG_FUEL_GAUGE_BQ27Z561
 	/* reduce fcc for esr cal*/
 	int                     esr_work_status;
 	bool                    cp_charge_enabled;
@@ -962,7 +997,6 @@ struct smb_charger {
 	bool			qc3_raise_done;
 	/* workarounds */
 	bool			support_conn_therm;
-	bool			support_ext_5v_boost;
 	int			conn_detect_count;
 	int			vbus_disable_gpio;
 	int			vbus_disable;
@@ -995,8 +1029,11 @@ struct smb_charger {
 	bool			flag_second_ffc_term_current;
 
 	int			night_chg_flag;
-	u8			apsd_stats;
-	bool			has_dp;
+
+	/* lpd timer work */
+	struct workqueue_struct *wq;
+	struct work_struct	lpd_recheck_work;
+#endif
 };
 
 int smblib_read(struct smb_charger *chg, u16 addr, u8 *val);
@@ -1048,7 +1085,9 @@ irqreturn_t typec_state_change_irq_handler(int irq, void *data);
 irqreturn_t typec_attach_detach_irq_handler(int irq, void *data);
 irqreturn_t dcin_uv_irq_handler(int irq, void *data);
 irqreturn_t dc_plugin_irq_handler(int irq, void *data);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 irqreturn_t dc_power_on_irq_handler(int irq, void *data);
+#endif
 irqreturn_t high_duty_cycle_irq_handler(int irq, void *data);
 irqreturn_t switcher_power_ok_irq_handler(int irq, void *data);
 irqreturn_t wdog_snarl_irq_handler(int irq, void *data);
@@ -1059,14 +1098,18 @@ irqreturn_t usbin_ov_irq_handler(int irq, void *data);
 irqreturn_t sdam_sts_change_irq_handler(int irq, void *data);
 int smblib_get_prop_input_suspend(struct smb_charger *chg,
 				union power_supply_propval *val);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_get_prop_battery_input_suspend(struct smb_charger *chg,
 				union power_supply_propval *val);
+#endif
 int smblib_get_prop_batt_present(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_get_prop_batt_capacity(struct smb_charger *chg,
 				union power_supply_propval *val);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_get_prop_batt_capacity_level(struct smb_charger *chg,
 				union power_supply_propval *val);
+#endif
 int smblib_get_prop_batt_status(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_get_prop_batt_charge_type(struct smb_charger *chg,
@@ -1087,8 +1130,10 @@ int smblib_get_prop_batt_iterm(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_set_prop_input_suspend(struct smb_charger *chg,
 				const union power_supply_propval *val);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_set_prop_battery_input_suspend(struct smb_charger *chg,
 				const union power_supply_propval *val);
+#endif
 int smblib_set_prop_batt_capacity(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_set_prop_batt_status(struct smb_charger *chg,
@@ -1114,8 +1159,10 @@ int smblib_get_prop_voltage_wls_output(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_set_prop_voltage_wls_output(struct smb_charger *chg,
 				const union power_supply_propval *val);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_get_prop_wireless_version(struct smb_charger *chg,
 				union power_supply_propval *val);
+#endif
 int smblib_set_prop_dc_reset(struct smb_charger *chg);
 int smblib_get_prop_usb_present(struct smb_charger *chg,
 				union power_supply_propval *val);
@@ -1166,7 +1213,9 @@ int smblib_get_prop_input_current_max(struct smb_charger *chg,
 				  union power_supply_propval *val);
 int smblib_set_prop_thermal_overheat(struct smb_charger *chg,
 			       int therm_overheat);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_get_prop_connector_temp(struct smb_charger *chg);
+#endif
 int smblib_get_skin_temp_status(struct smb_charger *chg);
 int smblib_get_prop_vph_voltage_now(struct smb_charger *chg,
 				union power_supply_propval *val);
@@ -1190,8 +1239,10 @@ int smblib_set_prop_ship_mode(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_set_prop_rechg_soc_thresh(struct smb_charger *chg,
 				const union power_supply_propval *val);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_set_prop_rechg_vbat_thresh(struct smb_charger *chg,
 				const union power_supply_propval *val);
+#endif
 void smblib_suspend_on_debug_battery(struct smb_charger *chg);
 int smblib_rerun_apsd_if_required(struct smb_charger *chg);
 void smblib_rerun_apsd(struct smb_charger *chg);
@@ -1213,7 +1264,7 @@ int smblib_typec_port_type_set(const struct typec_capability *cap,
 int smblib_get_prop_from_bms(struct smb_charger *chg,
 				enum power_supply_property psp,
 				union power_supply_propval *val);
-
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_set_prop_wireless_wakelock(struct smb_charger *chg,
 				const union power_supply_propval *val);
 
@@ -1239,8 +1290,6 @@ int smblib_get_prop_dc_temp_level(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_set_prop_tx_mac(struct smb_charger *chg,
 				const union power_supply_propval *val);
-void smblib_set_prop_pen_mac(struct smb_charger *chg,
-				const union power_supply_propval *val);
 int smblib_set_prop_rx_cr(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_set_prop_rx_cep(struct smb_charger *chg,
@@ -1255,10 +1304,9 @@ int smblib_set_prop_typec_boost_otg_disable(struct smb_charger *chg,
 				     const union power_supply_propval *val);
 int smblib_set_prop_battery_charging_enabled(struct smb_charger *chg,
 				const union power_supply_propval *val);
-int smblib_set_prop_smart_battery_enabled(struct smb_charger *chg,
-				    const union power_supply_propval *val);
 int smblib_set_vbus_disable(struct smb_charger *chg,
 					bool disable);
+#endif
 int smblib_get_iio_channel(struct smb_charger *chg, const char *propname,
 					struct iio_channel **chan);
 int smblib_read_iio_channel(struct smb_charger *chg, struct iio_channel *chan,
@@ -1275,6 +1323,7 @@ void smblib_apsd_enable(struct smb_charger *chg, bool enable);
 int smblib_force_vbus_voltage(struct smb_charger *chg, u8 val);
 int smblib_get_irq_status(struct smb_charger *chg,
 				union power_supply_propval *val);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_set_prop_type_recheck(struct smb_charger *chg,
 				 const union power_supply_propval *val);
 int smblib_get_prop_type_recheck(struct smb_charger *chg,
@@ -1282,18 +1331,22 @@ int smblib_get_prop_type_recheck(struct smb_charger *chg,
 int smblib_night_charging_func(struct smb_charger *chg,
 				 union power_supply_propval *val);
 int smblib_get_quick_charge_type(struct smb_charger *chg);
-int smblib_get_adapter_power_max(struct smb_charger *chg);
+#endif
 int smblib_get_qc3_main_icl_offset(struct smb_charger *chg, int *offset_ua);
+int smblib_enable_moisture_detection(struct smb_charger *chg, bool enable);
 
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_dp_dm_bq(struct smb_charger *chg, int val);
 int smblib_get_prop_battery_charging_enabled(struct smb_charger *chg,
 				union power_supply_propval *val);
 int smblib_set_fastcharge_mode(struct smb_charger *chg, bool enable);
 int smblib_get_fastcharge_mode(struct smb_charger *chg);
-int smblib_set_fastcharge_iterm(struct smb_charger *chg, int iterm);
 struct usbpd *smb_get_usbpd(void);
+#endif
 int smblib_init(struct smb_charger *chg);
 int smblib_deinit(struct smb_charger *chg);
+#ifdef CONFIG_MACH_XIAOMI_SM8250
 int smblib_get_prop_wireless_fw_version(struct smb_charger *chg,
 				     union power_supply_propval *val);
+#endif
 #endif /* __SMB5_CHARGER_H */
