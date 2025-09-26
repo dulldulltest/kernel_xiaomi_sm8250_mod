@@ -640,6 +640,12 @@ CONFIG_RMNET_SHS=y
 # CONFIG_OSSFOD is not set
 
 #
+# Xiaomi Camera Configuration
+#
+# CONFIG_CAMERA_NONEDXO is not set
+CONFIG_CAMERA_CAS=y
+
+#
 # General architecture-dependent options
 #
 # CONFIG_KPROBES is not set
