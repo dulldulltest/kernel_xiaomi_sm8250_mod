@@ -103,7 +103,7 @@ fi
 
 echo "Cleaning..."
 
-rm -rf out/
+#rm -rf out/
 rm -rf anykernel/
 
 echo "Clone AnyKernel3 for packing kernel (repo: https://github.com/liyafe1997/AnyKernel3)"
@@ -111,7 +111,7 @@ git clone https://github.com/liyafe1997/AnyKernel3 -b kona --single-branch --dep
 
 # Add date to local version
 local_version_str="-perf"
-local_version_date_str="-$(date +%Y%m%d)-${GIT_COMMIT_ID}-perf"
+local_version_date_str="-perf"
 
 # Restore local version string
 sed -i "s/${local_version_date_str}/${local_version_str}/g" arch/arm64/configs/${TARGET_DEVICE}_defconfig
