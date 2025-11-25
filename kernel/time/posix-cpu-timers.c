@@ -1155,11 +1155,12 @@ void cpu_timers_grab_expiry_lock(struct k_itimer *timer)
  * already updated our counts.  We need to check if any timers fire now.
  * Interrupts are disabled.
  */
-void run_posix_cpu_timers(struct task_struct *tsk)
+void run_posix_cpu_timers(void)
 {
-	LIST_HEAD(firing);
+	struct task_struct *tsk = current;
 	struct k_itimer *timer, *next;
 	unsigned long flags;
+	LIST_HEAD(firing);
 	spinlock_t *expiry_lock;
 
 	lockdep_assert_irqs_disabled();
