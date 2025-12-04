@@ -8317,12 +8317,18 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 	int sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
 
 	if (static_branch_unlikely(&sched_energy_present)) {
+		int high_cap_cpu =
+			 cpu_rq(cpu)->rd->mid_cap_orig_cpu != -1 ?
+			 cpu_rq(cpu)->rd->mid_cap_orig_cpu :
+			 cpu_rq(cpu)->rd->max_cap_orig_cpu;
+		bool sync_boost = sync && cpu >= high_cap_cpu;
 		rcu_read_lock();
 #ifdef CONFIG_PACKAGE_RUNTIME_INFO
 		wake_render(p);
 #endif
 
 		new_cpu = find_energy_efficient_cpu(p, prev_cpu, sync,
+							sync_boost,
 						    sibling_count_hint);
 		if (unlikely(new_cpu < 0))
 			new_cpu = prev_cpu;
