@@ -1,209 +1,212 @@
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/version.h>
+#include <linux/slab.h>             /* For kzalloc */
+#include <linux/gfp.h>
+#include <linux/vmalloc.h>          /* For vmalloc */
+#include <linux/uaccess.h>          /* For copy_to_user */
+#include <linux/miscdevice.h>       /* For misc_register (the /dev/srandom) device */
+#include <linux/random.h>           /* For inital seed */
+#include <linux/proc_fs.h>          /* For /proc filesystem */
+#include <linux/seq_file.h>         /* For seq_print */
+#include <linux/mutex.h>
+#include <linux/atomic.h>
+#include <linux/delay.h>
+#include <linux/kthread.h>
+#include "chacha.h"                 /* For chacha */
+
+#define DRIVER_AUTHOR "Jonathan Senkerik <josenk@jintegrate.co>"
+#define DRIVER_DESC   "Improved random number generator."
+#define ULTRA_HIGH_SPEED_MODE 1     /* Set to 0 for Chacha8 mode, set to 1 to enable Ultra High Speed Mode (XorShift) */
+#define SDEVICE_NAME "srandom"      /* Dev name as it appears in /proc/devices */
+#define APP_VERSION "2.1.0"
+#define numberOfRndArrays  64       /* Number of 512b Array. do not change */
+#define rndArraySize 67             /* Size of Array.  Must be >= 65. */
+#define THREAD_SLEEP_VALUE 601      /* Amount of time in seconds, the background thread should sleep between each operation. */
+#define PAID 0
+
+
+//#define DEBUG_CONNECTIONS 0
+//#define DEBUG_READ 0
+//#define DEBUG_WRITE 0
+//#define DEBUG_UPDATE_ARRAYS 0
+//#define DEBUG_SHUFFLE 0
+//#define DEBUG_THREAD 0
+//#define DEBUG_CHACHA 0
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,12,0)
+    #define COPY_TO_USER raw_copy_to_user
+    #define COPY_FROM_USER raw_copy_from_user
+#else
+    #define COPY_TO_USER copy_to_user
+    #define COPY_FROM_USER copy_from_user
+#endif
+
 /*
- * Copyright (C) 2015-2019 Jonathan Senkerik
- *
+ * Copyright (C) 2015 Jonathan Senkerik
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/slab.h>
-#include <linux/uaccess.h>
-#include <linux/miscdevice.h>
-#include <linux/time.h>
-#include <linux/proc_fs.h>
-#include <linux/seq_file.h>
-#include <linux/srandom.h>
-#include <linux/mutex.h>
-#include <linux/delay.h>
-#include <linux/kthread.h>
-
-/*
- * Size of Array.
- * Must be >= 64.
- * (actual size used will be 64
- * anything greater is thrown away).
- * Recommended prime.
- */
-#define arr_RND_SIZE 67
-/*
- * Number of 512b Array
- * (Must be power of 2)
- */
-#define num_arr_RND  16
-/*
- * Dev name as it appears in /proc/devices
- */
-#define sDEVICE_NAME "srandom"
-#define AppVERSION "1.38.0"
-/*
- * Amount of time worker thread should sleep between each operation.
- * Recommended prime
- */
-#define THREAD_SLEEP_VALUE 7
-#define PAID 0
-#define COPY_TO_USER raw_copy_to_user
-#define COPY_FROM_USER raw_copy_from_user
-#define KTIME_GET_NS ktime_get_real_ts64
-#define TIMESPEC timespec64
 
 /*
  * Prototypes
  */
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
-static uint64_t xorshft64(void);
-static uint64_t xorshft128(void);
-static int nextbuffer(void);
+static ssize_t sdevice_read(struct file *, char *, size_t, loff_t *);
+static ssize_t sdevice_write(struct file *, const char *, size_t, loff_t *);
+static uint64_t wyhash64(void);
+static uint64_t lcg_fast(void);
+static uint64_t xoshiro256pp(void);
+static inline uint64_t rotl(uint64_t, int);
+static inline uint64_t rotr(uint64_t, int);
+
 static void update_sarray(int);
-static void seed_PRND_s0(void);
-static void seed_PRND_s1(void);
-static void seed_PRND_x(void);
+static uint8_t get_next_buffer(void);
 static int proc_read(struct seq_file *m, void *v);
 static int proc_open(struct inode *inode, struct  file *file);
+static void shuffle_sarray(int);
+static uint64_t swapInt64(uint64_t);
+static uint64_t reverseInt64(uint64_t);
 static int work_thread(void *data);
+static int mod_init(void);
+static void mod_exit(void);
+
 
 /*
  * Global variables are declared as static, so are global within the file.
  */
-const struct file_operations sfops = {
-	.owner   = THIS_MODULE,
-	.open	= device_open,
-	.read	= sdevice_read,
-	.write   = sdevice_write,
-	.release = device_release
+static struct file_operations sfops = {
+        .owner   = THIS_MODULE,
+        .open    = device_open,
+        .read    = sdevice_read,
+        .write   = sdevice_write,
+        .release = device_release
 };
 
 static struct miscdevice srandom_dev = {
-	MISC_DYNAMIC_MINOR,
-	"srandom",
-	&sfops
+        MISC_DYNAMIC_MINOR,
+        "srandom",
+        &sfops
 };
 
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
+static struct proc_ops proc_fops={
+      .proc_open = proc_open,
+      .proc_release = single_release,
+      .proc_read = seq_read,
+      .proc_lseek = seq_lseek
+};
+#else
 static const struct file_operations proc_fops = {
-	.owner   = THIS_MODULE,
-	.read	= seq_read,
-	.open	= proc_open,
-	.llseek  = seq_lseek,
-	.release = single_release,
+        .owner   = THIS_MODULE,
+        .read    = seq_read,
+        .open    = proc_open,
+        .llseek  = seq_lseek,
+        .release = single_release,
 };
+#endif
 
-static struct mutex UpArr_mutex;
-static struct mutex Open_mutex;
+
+static struct mutex UpArr_mutex[numberOfRndArrays];
 static struct mutex ArrBusy_mutex;
-static struct mutex UpPos_mutex;
-
+static struct chacha_context ctx;
 static struct task_struct *kthread;
+
 
 /*
  * Global variables
  */
-/* Used for xorshft64 */
-uint64_t x;
-/* Used for xorshft128 */
-uint64_t s[2];
-/* Array of Array of SECURE RND numbers */
-uint64_t (*sarr_RND)[num_arr_RND + 1];
-/* Binary Flags for Busy Arrays */
-uint16_t CC_Busy_Flags;
-/* Array reserved to determine which buffer to use */
-int CC_buffer_position;
+uint64_t wyhash64_x;                      /* x for wyhash64 */
+uint64_t lcg_state;                       /* state for fast LCG in-module use only */
+uint64_t xoroshiro_s[4];                  /* s for xoroshiro256** */
+uint8_t chacha_key[32];
+uint8_t chacha_nonce[12];
+uint64_t chacha_counter =0;
+uint64_t (*prngArrays)[rndArraySize];     /* Array of Array of SECURE RND numbers */
+int8_t ArraysBusyFlags[numberOfRndArrays];     /* Binary Flags for Busy Arrays */
 
-uint64_t tm_seed;
-struct TIMESPEC ts;
 
 /*
  * Global counters
  */
-int16_t sdev_open; /* srandom device current open count */
-int32_t sdev_openCount;	/* srandom device total open count */
-uint64_t PRNGCount; /* Total generated (512byte) */
+atomic_t sdevOpenCurrent;          /* srandom device current open count */
+atomic_t sdevOpenTotal;            /* srandom device total open count */
+uint64_t generatedCount;           /* Total generated (512byte) */
+
 
 /*
  * This function is called when the module is loaded
  */
 int mod_init(void)
 {
-	int16_t C, CC;
-	int ret;
+        int16_t C,buffer_id;
 
-	sdev_open = 0;
-	sdev_openCount = 0;
-	PRNGCount = 0;
+        atomic_set(&sdevOpenCurrent, 0);
+        atomic_set(&sdevOpenTotal, 0);
+        generatedCount  = 0;
 
-	mutex_init(&UpArr_mutex);
-	mutex_init(&Open_mutex);
-	mutex_init(&ArrBusy_mutex);
-	mutex_init(&UpPos_mutex);
+        for (C = 0; C < numberOfRndArrays; C++) {
+                mutex_init(&UpArr_mutex[C]);
+        }
+        mutex_init(&ArrBusy_mutex);
 
-	/*
-	 * Entropy Initialize #1
-	 */
-	KTIME_GET_NS(&ts);
-	x = (uint64_t)ts.tv_nsec;
-	s[0] = xorshft64();
-	s[1] = xorshft64();
+        /*
+         * Register char device
+         */
+        if (misc_register(&srandom_dev))
+                pr_debug(KERN_INFO "[srandom] mod_init /dev/srandom driver registion failed..\n");
+        else
+                pr_debug(KERN_INFO "[srandom] mod_init /dev/srandom driver registered..\n");
 
-	/*
-	 * Register char device
-	 */
-	ret = misc_register(&srandom_dev);
-	if (ret)
-		pr_debug("/dev/srandom registration failed..\n");
-	else
-		pr_debug("/dev/srandom registered..\n");
+        /*
+         * Create /proc/srandom
+         */
+        // if (! proc_create("srandom", 0, NULL, &proc_fops))
+        if (! proc_create("srandom", 0, NULL, &proc_fops))
+                pr_debug(KERN_INFO "[srandom] mod_init /proc/srandom registion failed..\n");
+        else
+                pr_debug(KERN_INFO "[srandom] mod_init /proc/srandom registion regisered..\n");
 
-	/*
-	 * Create /proc/srandom
-	 */
-	if (!proc_create("srandom", 0, NULL, &proc_fops))
-		pr_debug("/proc/srandom registration failed..\n");
-	else
-		pr_debug("/proc/srandom registration registered..\n");
+        prngArrays = kzalloc((numberOfRndArrays + 1) * rndArraySize * sizeof(uint64_t), GFP_KERNEL);
+        while (!prngArrays) {
+                pr_debug(KERN_INFO "[srandom] mod_init kzalloc failed to allocate initial memory.  retrying...\n");
+                prngArrays = kzalloc((numberOfRndArrays + 1) * rndArraySize * sizeof(uint64_t), GFP_KERNEL);
+        }
 
-	pr_debug("Module version: "AppVERSION"\n");
+        //  Seed everything
+        get_random_bytes(&wyhash64_x, sizeof(uint64_t));
+        get_random_bytes(&lcg_state, sizeof(uint64_t));
+        get_random_bytes(&xoroshiro_s[0], sizeof(uint64_t));
+        get_random_bytes(&xoroshiro_s[1], sizeof(uint64_t));
+        get_random_bytes(&xoroshiro_s[2], sizeof(uint64_t));
+        get_random_bytes(&xoroshiro_s[3], sizeof(uint64_t));
 
-	sarr_RND = kzalloc((num_arr_RND + 1) * arr_RND_SIZE * sizeof(uint64_t),
-	GFP_KERNEL);
-	while (!sarr_RND) {
-		pr_debug("kzalloc failed to allocate initial memory. retrying...\n");
-		sarr_RND = kzalloc((num_arr_RND + 1) *
-			arr_RND_SIZE * sizeof(uint64_t), GFP_KERNEL);
-	}
+        chacha_init_context(&ctx, chacha_key, chacha_nonce, chacha_counter);
 
-	/*
-	 * Entropy Initialize #2
-	 */
-	seed_PRND_s0();
-	seed_PRND_s1();
-	seed_PRND_x();
+        /*
+         * Init the sarray
+         */
+        for (buffer_id = 0;buffer_id <= numberOfRndArrays ;buffer_id++) {
+                for (C = 0;C < rndArraySize;C++) {
+                        prngArrays[buffer_id][C] = wyhash64() ^ xoshiro256pp();
+                }
+                update_sarray(buffer_id);
+        }
 
-	/*
-	 * Init the sarray
-	 */
-	for (CC = 0; num_arr_RND >= CC; CC++) {
-		for (C = 0; arr_RND_SIZE >= C; C++)
-			sarr_RND[CC][C] = xorshft128();
-		update_sarray(CC);
-	}
+        kthread = kthread_create(work_thread, NULL, "srandom-kthread");
+        wake_up_process(kthread);
 
-	kthread = kthread_create(work_thread, NULL, "mykthread");
-	wake_up_process(kthread);
-
-	return 0;
+        return 0;
 }
 
 /*
@@ -211,30 +214,32 @@ int mod_init(void)
  */
 void mod_exit(void)
 {
-	kthread_stop(kthread);
-	misc_deregister(&srandom_dev);
-	remove_proc_entry("srandom", NULL);
-	pr_debug("srandom deregistered..\n");
+        kthread_stop(kthread);
+
+        misc_deregister(&srandom_dev);
+
+        remove_proc_entry("srandom", NULL);
+
+        kfree(prngArrays);
+
+        pr_debug(KERN_INFO "[srandom] mod_exit srandom deregisered..\n");
 }
 
 
 /*
- * This function is alled when a process tries to open the device file.
- * "dd if=/dev/srandom"
+ * This function is called when a process tries to open the device file. "dd if=/dev/srandom"
  */
 static int device_open(struct inode *inode, struct file *file)
 {
-	while (mutex_lock_interruptible(&Open_mutex))
-		;
+        atomic_inc(&sdevOpenCurrent);
+        atomic_inc(&sdevOpenTotal);
 
-	sdev_open++;
-	sdev_openCount++;
-	mutex_unlock(&Open_mutex);
+        #ifdef DEBUG_CONNECTIONS
+        pr_debug(KERN_INFO "[srandom] device_open (current open) :%d\n", atomic_read(&sdevOpenCurrent));
+        pr_debug(KERN_INFO "[srandom] device_open (total open)   :%d\n", atomic_read(&sdevOpenTotal));
+        #endif
 
-	pr_debug("(current open) :%d\n", sdev_open);
-	pr_debug("(total open)   :%d\n", sdev_openCount);
-
-	return 0;
+        return 0;
 }
 
 
@@ -243,398 +248,546 @@ static int device_open(struct inode *inode, struct file *file)
  */
 static int device_release(struct inode *inode, struct file *file)
 {
-	while (mutex_lock_interruptible(&Open_mutex))
-		;
+        atomic_dec(&sdevOpenCurrent);
 
-	sdev_open--;
-	mutex_unlock(&Open_mutex);
+        #ifdef DEBUG_CONNECTIONS
+        pr_debug(KERN_INFO "[srandom] device_release (current open) :%d\n", atomic_read(&sdevOpenCurrent));
+        #endif
 
-	pr_debug("(current open) :%d\n", sdev_open);
-
-	return 0;
+        return 0;
 }
 
 /*
  * Called when a process reads from the device.
  */
-ssize_t sdevice_read(struct file *file, char *buf,
-size_t count, loff_t *ppos)
+static ssize_t sdevice_read(struct file * file, char * buf, size_t requestedCount, loff_t *ppos)
 {
-	/* Buffer to hold numbers to send */
-	char *new_buf;
-	int ret, counter;
-	int CC;
-	size_t src_counter;
+        int Block, ret;
+        uint8_t buffer_id;
+        char *new_buf;                 /* Buffer to hold numbers to send */
+        bool isVMalloc = 0;
 
-	pr_debug("count:%zu\n", count);
 
-	/*
-	 * if requested count is small (<512), then select an array and send it
-	 * otherwise, create a new larger buffer to hold it all.
-	 */
-	if (count <= 512) {
-		while (mutex_lock_interruptible(&ArrBusy_mutex))
-			;
+        #ifdef DEBUG_READ
+        pr_debug(KERN_INFO "[srandom] sdevice_read requestedCount:%zu\n", requestedCount);
+        #endif
 
-		CC = nextbuffer();
-		while ((CC_Busy_Flags & 1 << CC) == (1 << CC)) {
-			CC += 1;
-			if (num_arr_RND <= CC)
-				CC = 0;
-		}
 
-		/*
-		 * Mark the Arry as busy by setting the flag
-		 */
-		CC_Busy_Flags += (1 << CC);
-		mutex_unlock(&ArrBusy_mutex);
+        new_buf = kzalloc((requestedCount + 512) * sizeof(uint8_t), GFP_KERNEL|__GFP_NOWARN);
+        while (!new_buf) {
+                #ifdef DEBUG_READ
+                pr_debug(KERN_INFO "[srandom] using vmalloc to allocate large blocksize.\n");
+                #endif
 
-		/*
-		 *  Send array to device
-		 */
-		ret = COPY_TO_USER(buf, sarr_RND[CC], count);
+                isVMalloc = 1;
+                new_buf = vmalloc((requestedCount + 512) * sizeof(uint8_t));
+        }
 
-		/*
-		 * Get more RND numbers
-		 */
-		update_sarray(CC);
+        for (Block = 0; Block <= (requestedCount / 512); Block++) {
+                buffer_id = get_next_buffer();
+                generatedCount++;
 
-		pr_debug("small CC_Busy_Flags:%d CC:%d\n", CC_Busy_Flags, CC);
+                /*
+                 * Fill new_buf from a prngArrays block until requestedCount is met.
+                 */
+                #ifdef DEBUG_READ
+                pr_debug(KERN_INFO "[srandom] Block:%u buffer_id:%d\n", Block, buffer_id);
+                #endif
 
-		/*
-		 * Clear CC_Busy_Flag
-		 */
-		if (mutex_lock_interruptible(&ArrBusy_mutex))
-			return -ERESTARTSYS;
+                memcpy(new_buf + (Block * 512), prngArrays[buffer_id], 512);
+                
+                #if ULTRA_HIGH_SPEED_MODE
+                // UHS mode will update the prngArrays block with new values for next request.
+                update_sarray(buffer_id);
+                #endif
 
-		CC_Busy_Flags -= (1 << CC);
-		mutex_unlock(&ArrBusy_mutex);
-	} else {
-		/*
-		 * Allocate memory for new_buf
-		 */
-		long count_remaining = count;
+                /*
+                 * Clear ArraysBusyFlags
+                 */
+                if (mutex_lock_interruptible(&ArrBusy_mutex))
+                        return -ERESTARTSYS;
+                ArraysBusyFlags[buffer_id] = 0;
+                mutex_unlock(&ArrBusy_mutex);
+        }
 
-		pr_debug("count_remaining:%ld count:%ld\n",
-			count_remaining, count);
+        //  Use Chacha to cipher new_buf
+        #if ! ULTRA_HIGH_SPEED_MODE
+        //pr_debug(KERN_INFO "[srandom] preChaCha 0:%d last:%d\n", (uint8_t)new_buf[0], (uint8_t)new_buf[sizeof(new_buf) -1]);
 
-		while (count_remaining > 0) {
-			pr_debug("count_remaining:%ld count:%ld\n",
-				count_remaining, count);
+        chacha_xor(&ctx, new_buf, requestedCount);
+        chacha_counter += requestedCount;
 
-			new_buf = kzalloc((count_remaining + 512) *
-				sizeof(uint8_t), GFP_KERNEL);
-			while (!new_buf) {
-				pr_debug("buffered kzalloc failed to allocate buffer.",
-					"retrying...\n");
-				new_buf = kzalloc((count_remaining + 512) *
-					sizeof(uint8_t), GFP_KERNEL);
-			}
+        //pr_debug(KERN_INFO "[srandom] postChaCha 0:%d last:%d\n", (uint8_t)new_buf[0], (uint8_t)new_buf[sizeof(new_buf) -1]);
+        #endif
 
-			counter = 0;
-			src_counter = 512;
-			ret = 0;
+        /*
+         * Send new_buf to device
+         */
+        ret = COPY_TO_USER(buf, new_buf, requestedCount);
 
-			/*
-			 * Select a RND array
-			 */
-			while (mutex_lock_interruptible(&ArrBusy_mutex))
-				;
+        /*
+         * Free allocated memory
+         */
+        if (isVMalloc) {
+                vfree(new_buf);
+        } else {
+                kfree(new_buf);
+        }
 
-			CC = nextbuffer();
-			while ((CC_Busy_Flags & 1 << CC) == (1 << CC)) {
-				CC = xorshft128() & (num_arr_RND - 1);
-				pr_debug("buffered CC_Busy_Flags:%d CC:%d\n",
-					CC_Busy_Flags, CC);
-			}
 
-			/*
-			 * Mark the Arry as busy by setting the flag
-			 */
-			CC_Busy_Flags += (1 << CC);
-			mutex_unlock(&ArrBusy_mutex);
-
-			/*
-			 * Loop until we reach count_remaining size.
-			 */
-			while (counter < (int)count_remaining) {
-				/*
-				 * Copy RND numbers to new_buf
-				 */
-				memcpy(new_buf + counter, sarr_RND[CC],
-					src_counter);
-				update_sarray(CC);
-
-				pr_debug("buffered COPT_TO_USER counter:%d count_remaining:%zu\n",
-					counter, count_remaining);
-
-				counter += 512;
-			}
-
-			/*
-			 * Clear CC_Busy_Flag
-			 */
-			while (mutex_lock_interruptible(&ArrBusy_mutex))
-				;
-
-			CC_Busy_Flags -= (1 << CC);
-			mutex_unlock(&ArrBusy_mutex);
-
-			/*
-			 * Send new_buf to device
-			 */
-			ret = COPY_TO_USER(buf, new_buf, count_remaining);
-
-			/*
-			 * Free allocated memory
-			 */
-			kfree(new_buf);
-
-			count_remaining = count_remaining - 1048576;
-		}
-	}
-	/*
-	 * return how many chars we sent
-	 */
-	return count;
+        /*
+         * return how many chars we sent
+         */
+        return requestedCount;
 }
-EXPORT_SYMBOL(sdevice_read);
+
 
 /*
  * Called when someone tries to write to /dev/srandom device
  */
-ssize_t sdevice_write(struct file *file,
-const char __user *buf, size_t count, loff_t *ppos)
+static ssize_t sdevice_write(struct file *file, const char __user *buf, size_t receivedCount, loff_t *ppos)
 {
-	char *newdata;
-	int  ret;
 
-	pr_debug("count:%zu\n", count);
+        char *newdata;
+        int result;
 
-	/*
-	 * Allocate memory to read from device
-	 */
-	newdata = kzalloc(count, GFP_KERNEL);
-	while (!newdata)
-		newdata = kzalloc(count, GFP_KERNEL);
+        #ifdef DEBUG_CONNECTIONS
+        pr_debug(KERN_INFO "[srandom] sdevice_write receivedCount:%zu\n", receivedCount);
+        #endif
 
-	ret = COPY_FROM_USER(newdata, buf, count);
+        /*
+         * Allocate memory to read from device
+         */
+        newdata = kzalloc(receivedCount, GFP_KERNEL);
+        while (!newdata) {
+                newdata = kzalloc(receivedCount, GFP_KERNEL);
+        }
 
-	/*
-	 * Free memory
-	 */
-	kfree(newdata);
+        result = COPY_FROM_USER(newdata, buf, receivedCount);
 
-	pr_debug("COPT_FROM_USER count:%zu\n", count);
+        /*
+         * Free memory
+         */
+        kfree(newdata);
 
-	return count;
+        #ifdef DEBUG_WRITE
+        pr_debug(KERN_INFO "[srandom] sdevice_write COPY_FROM_USER receivedCount:%zu \n", receivedCount);
+        #endif
+
+        return receivedCount;
 }
-
 
 
 /*
- * Update the sarray with new random numbers
+ *  Get the next available buffer
  */
-void update_sarray(int CC)
-{
-	int16_t C;
-	int64_t X, Y, Z1, Z2, Z3;
+uint8_t get_next_buffer(void) {
+        uint8_t next;
 
-	/*
-	 * This function must run exclusivly
-	 */
-	while (mutex_lock_interruptible(&UpArr_mutex))
-		;
+        next = (uint8_t)lcg_fast() >> 2;
 
-	PRNGCount++;
+        while (mutex_lock_interruptible(&ArrBusy_mutex));
+        while (ArraysBusyFlags[next] != 0) {
+                next += 1;
+                if (next >= numberOfRndArrays) {
+                        next = 0;
+                }
+        }
 
-	Z1 = xorshft64();
-	Z2 = xorshft64();
-	Z3 = xorshft64();
-	if ((Z1 & 1) == 0) {
-		pr_debug("0\n");
-		for (C = 0; C < (arr_RND_SIZE - 4) ; C = C + 4) {
-			X = xorshft128();
-			Y = xorshft128();
-			sarr_RND[CC][C]	 = sarr_RND[CC][C + 1] ^ X ^ Y;
-			sarr_RND[CC][C + 1] = sarr_RND[CC][C + 2] ^ Y ^ Z1;
-			sarr_RND[CC][C + 2] = sarr_RND[CC][C + 3] ^ X ^ Z2;
-			sarr_RND[CC][C + 3] = X ^ Y ^ Z3;
-		}
-	} else {
-		pr_debug("1\n");
-		for (C = 0; C < (arr_RND_SIZE - 4) ; C = C + 4) {
-			X = xorshft128();
-			Y = xorshft128();
-			sarr_RND[CC][C]	 = sarr_RND[CC][C + 1] ^ X ^ Z2;
-			sarr_RND[CC][C + 1] = sarr_RND[CC][C + 2] ^ X ^ Y;
-			sarr_RND[CC][C + 2] = sarr_RND[CC][C + 3] ^ Y ^ Z3;
-			sarr_RND[CC][C + 3] = X ^ Y ^ Z1;
-		}
-	}
+        ArraysBusyFlags[next] = 1;
+        mutex_unlock(&ArrBusy_mutex);
 
-	mutex_unlock(&UpArr_mutex);
-
-	pr_debug("CC:%d, X:%llu, Y:%llu, Z1:%llu, Z2:%llu, Z3:%llu,\n",
-		CC, X, Y, Z1, Z2, Z3);
+        return next;
 }
-EXPORT_SYMBOL(sdevice_write);
+
+
+void update_sarray(int buffer_id) {
+        int16_t C;
+        int64_t X[2], Z[2], temp;
+        int8_t mixer;
+
+        mixer = (uint8_t)lcg_fast();
+        if ((mixer & 1) == 1) {
+                Z[0] = wyhash64();
+        } else {
+                Z[0] = xoshiro256pp();
+        }
+
+        if ((mixer & 2) == 2) {
+                Z[1] = wyhash64();
+        } else {
+                Z[1] = xoshiro256pp();
+        }
+
+        /*
+         * This must run exclusivly for this specific buffer
+         */
+        while (mutex_lock_interruptible(&UpArr_mutex[buffer_id]));
+
+        for (C = 0; C < (rndArraySize -4); C = C + 4) {
+                mixer = (uint8_t)lcg_fast();
+                X[0]  = wyhash64();
+                X[1]  = wyhash64();
+                temp                         = prngArrays[buffer_id][C];
+                prngArrays[buffer_id][C]     = prngArrays[buffer_id][C + 1] ^ X[(mixer & 1) == 1] ^ Z[(mixer & 16) == 16];
+                prngArrays[buffer_id][C + 1] = prngArrays[buffer_id][C + 2] ^ X[(mixer & 2) == 2] ^ Z[(mixer & 32) == 32];
+                prngArrays[buffer_id][C + 2] = prngArrays[buffer_id][C + 3] ^ X[(mixer & 4) == 4] ^ Z[(mixer & 64) == 64];
+                prngArrays[buffer_id][C + 3] = temp                         ^ X[(mixer & 8) == 8] ^ Z[(mixer & 128) == 128];
+        }
+
+        shuffle_sarray(buffer_id);
+
+        mutex_unlock(&UpArr_mutex[buffer_id]);
+
+        #ifdef DEBUG_UPDATE_ARRAYS
+        pr_debug(KERN_INFO "[srandom] update_sarray buffer_id:%d, X:%llu, Y:%llu, Z1:%llu, Z2:%llu, Z3:%llu,\n", buffer_id, X, Y, Z1, Z2, Z3);
+        #endif
+}
+
 
 /*
- *  Seeding the xorshft's
+ * Shuffle the sarray
  */
-void seed_PRND_s0(void)
+inline void shuffle_sarray(int buffer_id)
 {
-	 KTIME_GET_NS(&ts);
-	 s[0] = (s[0] << 31) ^ (uint64_t)ts.tv_nsec;
-	 pr_debug("x:%llu, s[0]:%llu, s[1]:%llu\n",
-		x, s[0], s[1]);
+        uint64_t temp;
+        uint16_t mixer = (uint16_t)lcg_fast();
+        uint8_t mixtype = (mixer & 448) >> 6;
+        uint8_t istart = (mixer & 56) >> 4;
+        uint8_t increment = (mixer & 3) + 1;
+        int i;
+        
+
+        #ifdef DEBUG_SHUFFLE
+        pr_debug(KERN_INFO "[srandom] shuffle_sarray istart: %d, increment: %d, buffer_id:%d, first:%llu, last:%llu\n", istart, increment, buffer_id, prngArrays[buffer_id][0], prngArrays[buffer_id][rndArraySize-1]);
+        #endif
+
+
+
+        for(i = istart; i<rndArraySize/2; i = i + increment){
+            if (mixtype == 0) {
+                                temp = prngArrays[buffer_id][i];
+                if ((mixer & 64) == 64) {
+                        prngArrays[buffer_id][i] = swapInt64(prngArrays[buffer_id][rndArraySize-i-1]);
+                } else {
+                        prngArrays[buffer_id][i] = prngArrays[buffer_id][rndArraySize-i-1];
+                }
+                if ((mixer & 128) == 128) {
+                        prngArrays[buffer_id][rndArraySize-i-1] = temp;
+                } else {
+                        prngArrays[buffer_id][rndArraySize-i-1] = reverseInt64(temp);
+                }
+
+            } else if (mixtype == 1) {
+                prngArrays[buffer_id][i] = ((prngArrays[buffer_id][i] & 0xFFFFFFFF00000000ULL) >> 32) | ((prngArrays[buffer_id][i] & 0x00000000FFFFFFFFULL) << 32);
+                prngArrays[buffer_id][rndArraySize-i-1] = ((prngArrays[buffer_id][rndArraySize-i-1] & 0xFFFFFFFF00000000ULL) >> 32) | ((prngArrays[buffer_id][rndArraySize-i-1] & 0x00000000FFFFFFFFULL) << 32);
+
+            } else if (mixtype == 2) {
+                prngArrays[buffer_id][i] = ((prngArrays[buffer_id][i] & 0xFFFF0000FFFF0000ULL) >> 16) | ((prngArrays[buffer_id][i] & 0x0000FFFF0000FFFFULL) << 16);
+                prngArrays[buffer_id][rndArraySize-i-1] = ((prngArrays[buffer_id][rndArraySize-i-1] & 0xFFFF0000FFFF0000ULL) >> 16) | ((prngArrays[buffer_id][rndArraySize-i-1] & 0x0000FFFF0000FFFFULL) << 16);
+
+            } else if (mixtype == 3) {
+                prngArrays[buffer_id][i] = ((prngArrays[buffer_id][i] & 0xFF00FF00FF00FF00ULL) >> 8) | ((prngArrays[buffer_id][i] & 0x00FF00FF00FF00FFULL) << 8);
+                prngArrays[buffer_id][rndArraySize-i-1] = ((prngArrays[buffer_id][rndArraySize-i-1] & 0xFF00FF00FF00FF00ULL) >> 8) | ((prngArrays[buffer_id][rndArraySize-i-1] & 0x00FF00FF00FF00FFULL) << 8);;
+                
+            } else if (mixtype == 4) {
+                uint8_t rot_amount = (mixer & 63);
+                if ((mixer & 64) == 64) {
+                        prngArrays[buffer_id][i] = rotl(prngArrays[buffer_id][i], rot_amount);
+                        prngArrays[buffer_id][rndArraySize-i-1] = rotr(prngArrays[buffer_id][rndArraySize-i-1], rot_amount);
+                } else {
+                        prngArrays[buffer_id][i] = rotr(prngArrays[buffer_id][i], rot_amount);
+                        prngArrays[buffer_id][rndArraySize-i-1] = rotl(prngArrays[buffer_id][rndArraySize-i-1], rot_amount);
+                }
+                
+            } else if (mixtype == 5) {
+                uint64_t temp_i = prngArrays[buffer_id][i];
+                uint64_t temp_j = prngArrays[buffer_id][rndArraySize-i-1];
+                prngArrays[buffer_id][i] ^= rotl(temp_i, 13) ^ rotl(temp_i, 35);
+                prngArrays[buffer_id][rndArraySize-i-1] ^= rotl(temp_j, 17) ^ rotl(temp_j, 41);
+                
+            }
+
+        }
 }
 
-void seed_PRND_s1(void)
-{
-	KTIME_GET_NS(&ts);
-	s[1] = (s[1] << 24) ^ (uint64_t)ts.tv_nsec;
-	pr_debug("x:%llu, s[0]:%llu, s[1]:%llu\n",
-		x, s[0], s[1]);
-}
-
-void seed_PRND_x(void)
-{
-	KTIME_GET_NS(&ts);
-	x = (x << 32) ^ (uint64_t)ts.tv_nsec;
-	pr_debug("x:%llu, s[0]:%llu, s[1]:%llu\n",
-		x, s[0], s[1]);
-}
 
 /*
  * PRNG functions
  */
-uint64_t xorshft64(void)
-{
-	uint64_t z = (x += 0x9E3779B97F4A7C15ULL);
+//https://lemire.me/blog/2019/03/19/the-fastest-conventional-random-number-generator-that-can-pass-big-crush/
+uint64_t wyhash64(void) {
+        __uint128_t tmp;
+        uint64_t m1;
+        uint64_t m2;
 
-	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-	z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-	return z ^ (z >> 31);
+        wyhash64_x += 0x60bee2bee120fc15;
+
+        tmp = (__uint128_t) wyhash64_x * 0xa3b195354a39b70d;
+        m1 = (tmp >> 64) ^ tmp;
+        tmp = (__uint128_t)m1 * 0x1b03738712fad5c9;
+        m2 = (tmp >> 64) ^ tmp;
+        return m2;
 }
 
-uint64_t xorshft128(void)
-{
-	uint64_t s1 = s[0];
-	const uint64_t s0 = s[1];
-
-	s[0] = s0;
-	s1 ^= s1 << 23;
-	return (s[1] = (s1 ^ s0 ^ (s1 >> 17) ^ (s0 >> 26))) + s0;
+// Fast LCG for in-module instance (maximum speed)
+uint64_t lcg_fast(void) {
+        lcg_state = lcg_state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return lcg_state;
 }
+
+// https://prng.di.unimi.it/
+uint64_t xoshiro256pp(void) {
+        const uint64_t result = rotl(xoroshiro_s[0] + xoroshiro_s[3], 23) + xoroshiro_s[0];
+
+        const uint64_t t = xoroshiro_s[1] << 17;
+
+        xoroshiro_s[2] ^= xoroshiro_s[0];
+        xoroshiro_s[3] ^= xoroshiro_s[1];
+        xoroshiro_s[1] ^= xoroshiro_s[2];
+        xoroshiro_s[0] ^= xoroshiro_s[3];
+
+        xoroshiro_s[2] ^= t;
+
+        xoroshiro_s[3] = rotl(xoroshiro_s[3], 45);
+
+        return result;
+}
+inline uint64_t rotl(const uint64_t x, int k) {
+        return (x << k) | (x >> (64 - k));
+}
+inline uint64_t rotr(const uint64_t x, int k) {
+        return (x >> k) | (x << (64 - k));
+}
+
+
+//Swap a 64-bit integer
+#define SWAPINT64(x) ( \
+   (((uint64_t)(x) & 0x00000000000000FFULL) << 56) | \
+   (((uint64_t)(x) & 0x000000000000FF00ULL) << 40) | \
+   (((uint64_t)(x) & 0x0000000000FF0000ULL) << 24) | \
+   (((uint64_t)(x) & 0x00000000FF000000ULL) << 8) | \
+   (((uint64_t)(x) & 0x000000FF00000000ULL) >> 8) | \
+   (((uint64_t)(x) & 0x0000FF0000000000ULL) >> 24) | \
+   (((uint64_t)(x) & 0x00FF000000000000ULL) >> 40) | \
+   (((uint64_t)(x) & 0xFF00000000000000ULL) >> 56))
+inline uint64_t swapInt64(uint64_t x)
+{
+    return SWAPINT64(x);
+}
+
+inline uint64_t reverseInt64(uint64_t value) {
+    value = ((value & 0xFFFFFFFF00000000ULL) >> 32) | ((value & 0x00000000FFFFFFFFULL) << 32);
+    value = ((value & 0xFFFF0000FFFF0000ULL) >> 16) | ((value & 0x0000FFFF0000FFFFULL) << 16);
+    value = ((value & 0xFF00FF00FF00FF00ULL) >> 8) | ((value & 0x00FF00FF00FF00FFULL) << 8);
+    value = ((value & 0xF0F0F0F0F0F0F0F0ULL) >> 4) | ((value & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    value = ((value & 0xCCCCCCCCCCCCCCCCULL) >> 2) | ((value & 0x3333333333333333ULL) << 2);
+    value = ((value & 0xAAAAAAAAAAAAAAAAULL) >> 1) | ((value & 0x5555555555555555ULL) << 1);
+
+    return value;
+}
+
 
 /*
- *  This function returns the next sarray to use/read.
- */
-int nextbuffer(void)
-{
-	uint8_t position = (int)((CC_buffer_position * 4) / 64);
-	uint8_t roll = CC_buffer_position % 16;
-	uint8_t nextbuffer = (sarr_RND[num_arr_RND][position] >> (roll * 4))
-		& (num_arr_RND - 1);
-
-	pr_debug("raw:%lld",
-			"position:%d",
-			"roll:%d",
-			"%s:%d",
-			"CC_buffer_position:%d\n",
-			sarr_RND[num_arr_RND][position],
-			position,
-			roll,
-			__func__,
-			nextbuffer,
-			CC_buffer_position);
-
-	while (mutex_lock_interruptible(&UpPos_mutex))
-		;
-	CC_buffer_position++;
-	mutex_unlock(&UpPos_mutex);
-
-	if (CC_buffer_position >= 1021) {
-		while (mutex_lock_interruptible(&UpPos_mutex))
-			;
-		CC_buffer_position = 0;
-		mutex_unlock(&UpPos_mutex);
-		update_sarray(num_arr_RND);
-	}
-
-	return nextbuffer;
-}
-
-/*
- *  The Kernel thread doing background tasks.
+ *  The Kernel thread refreshing the arrays.
  */
 int work_thread(void *data)
 {
-	int interation = 0;
+        int buffer_id = 0;
 
-	while (!kthread_should_stop()) {
-		if (interation <= num_arr_RND)
-			update_sarray(interation);
-		else if (interation == num_arr_RND + 1)
-			seed_PRND_s0();
-		else if (interation == num_arr_RND + 2)
-			seed_PRND_s1();
-		else if (interation == num_arr_RND + 3)
-			seed_PRND_x();
-		else
-			interation = -1;
+        while (!kthread_should_stop()) {
 
-		interation++;
-		ssleep(THREAD_SLEEP_VALUE);
-	}
+                msleep_interruptible(THREAD_SLEEP_VALUE * 1000);
+                
+                buffer_id ++;
+                if (buffer_id == numberOfRndArrays) {
+                        buffer_id = 0;
+                }
 
-	do_exit(0);
-	return 0;
-}
+                update_sarray(buffer_id);
+
+                #ifdef DEBUG_THREAD
+                pr_debug(KERN_INFO "[srandom] work_thread buffer_id:%d\n", buffer_id);
+                #endif
+
+        }
+
+        return 0;
+ }
+
+
 
 /*
  * This function is called when reading /proc filesystem
  */
 int proc_read(struct seq_file *m, void *v)
 {
-	seq_puts(m, "-----------------------:----------------------\n");
-	seq_puts(m, "Device                 : /dev/"sDEVICE_NAME"\n");
-	seq_puts(m, "Module version         : "AppVERSION"\n");
-	seq_printf(m, "Current open count     : %d\n", sdev_open);
-	seq_printf(m, "Total open count       : %d\n", sdev_openCount);
-	seq_printf(m, "Total K bytes          : %llu\n", PRNGCount / 2);
-	if (PAID == 0) {
-		seq_puts(m, "-----------------------:----------------------\n");
-		seq_puts(m, "Please support my work and efforts contributing\n");
-		seq_puts(m, "to the Linux community.  A $25 payment per\n");
-		seq_puts(m, "server would be highly appreciated.\n");
-	}
-	seq_puts(m, "-----------------------:----------------------\n");
-	seq_puts(m, "Author                 : Jonathan Senkerik\n");
-	seq_puts(m, "Website                : http://www.jintegrate.co\n");
-	seq_puts(m, "github                 : http://github.com/josenk/srandom\n");
-	if (PAID == 0) {
-		seq_puts(m, "Paypal                 : josenk@jintegrate.co\n");
-		seq_puts(m, "Bitcoin                : 1GEtkAm97DphwJbJTPyywv6NbqJKLMtDzA\n");
-		seq_puts(m, "Commercial Invoice     : Avail on request.\n");
-	}
-	return 0;
+        seq_printf(m, "-----------------------:----------------------\n");
+        seq_printf(m, "Device                 : /dev/"SDEVICE_NAME"\n");
+        #if ULTRA_HIGH_SPEED_MODE
+                seq_printf(m, "Module version         : "APP_VERSION" UHS (XorShift)\n");
+        #else
+                seq_printf(m, "Module version         : "APP_VERSION" ChaCha\n");
+        #endif
+        seq_printf(m, "Current open count     : %d\n", atomic_read(&sdevOpenCurrent));
+        seq_printf(m, "Total open count       : %d\n", atomic_read(&sdevOpenTotal));
+        seq_printf(m, "Total K bytes          : %llu\n",generatedCount / 2);
+        if (PAID == 0) {
+                seq_printf(m, "-----------------------:----------------------\n");
+                seq_printf(m, "Please support my work and efforts contributing\n");
+                seq_printf(m, "to the Linux community.  A $25 payment per\n");
+                seq_printf(m, "server would be highly appreciated.\n");
+        }
+        seq_printf(m, "-----------------------:----------------------\n");
+        seq_printf(m, "Author                 : Jonathan Senkerik\n");
+        seq_printf(m, "Website                : https://www.jintegrate.co\n");
+        seq_printf(m, "github                 : https://github.com/josenk/srandom\n");
+        if (PAID == 0) {
+                seq_printf(m, "Paypal                 : josenk@jintegrate.co\n");
+                seq_printf(m, "Bitcoin                : 1GEtkAm97DphwJbJTPyywv6NbqJKLMtDzA\n");
+                seq_printf(m, "Commercial Invoice     : Avail on request.\n");
+        }
+        return 0;
 }
+
 
 int proc_open(struct inode *inode, struct  file *file)
 {
-	return single_open(file, proc_read, NULL);
+        return single_open(file, proc_read, NULL);
 }
+
+
+/*
+ *  ChaCha
+ *  Adapted from: https://github.com/Ginurx/chacha20-c
+ */
+static uint32_t rotl32(uint32_t x, int n) 
+{
+        return (x << n) | (x >> (32 - n));
+}
+
+static uint32_t pack4(const uint8_t *a)
+{
+        uint32_t res = 0;
+        res |= (uint32_t)a[0] << 0 * 8;
+        res |= (uint32_t)a[1] << 1 * 8;
+        res |= (uint32_t)a[2] << 2 * 8;
+        res |= (uint32_t)a[3] << 3 * 8;
+        return res;
+}
+
+static void chacha_init_block(struct chacha_context *ctx, uint8_t key[], uint8_t nonce[])
+{
+        const uint8_t *magic_constant = (uint8_t*)"expand 32-byte k";
+
+        memcpy(ctx->key, key, sizeof(ctx->key));
+        memcpy(ctx->nonce, nonce, sizeof(ctx->nonce));
+
+        ctx->state[0] = pack4(magic_constant + 0 * 4);
+        ctx->state[1] = pack4(magic_constant + 1 * 4);
+        ctx->state[2] = pack4(magic_constant + 2 * 4);
+        ctx->state[3] = pack4(magic_constant + 3 * 4);
+        ctx->state[4] = pack4(key + 0 * 4);
+        ctx->state[5] = pack4(key + 1 * 4);
+        ctx->state[6] = pack4(key + 2 * 4);
+        ctx->state[7] = pack4(key + 3 * 4);
+        ctx->state[8] = pack4(key + 4 * 4);
+        ctx->state[9] = pack4(key + 5 * 4);
+        ctx->state[10] = pack4(key + 6 * 4);
+        ctx->state[11] = pack4(key + 7 * 4);
+        // 64 bit counter initialized to zero by default.
+        ctx->state[12] = 0;
+        ctx->state[13] = pack4(nonce + 0 * 4);
+        ctx->state[14] = pack4(nonce + 1 * 4);
+        ctx->state[15] = pack4(nonce + 2 * 4);
+
+        memcpy(ctx->nonce, nonce, sizeof(ctx->nonce));
+}
+
+static void chacha_block_set_counter(struct chacha_context *ctx, uint64_t counter)
+{
+        ctx->state[12] = (uint32_t)counter;
+        ctx->state[13] = pack4(ctx->nonce + 0 * 4) + (uint32_t)(counter >> 32);
+}
+
+static void chacha_block_next(struct chacha_context *ctx) {
+        uint32_t *counter = ctx->state + 12;
+        int i;
+
+        // This is where the crazy voodoo magic happens.
+        // Mix the bytes a lot and hope that nobody finds out how to undo it.
+        for (i = 0; i < 16; i++) ctx->keystream32[i] = ctx->state[i];
+
+#define CHACHA_QUARTERROUND(x, a, b, c, d) \
+    x[a] += x[b]; x[d] = rotl32(x[d] ^ x[a], 16); \
+    x[c] += x[d]; x[b] = rotl32(x[b] ^ x[c], 12); \
+    x[a] += x[b]; x[d] = rotl32(x[d] ^ x[a], 8); \
+    x[c] += x[d]; x[b] = rotl32(x[b] ^ x[c], 7);
+
+        for (i = 0; i < 4; i++) 
+        {
+                CHACHA_QUARTERROUND(ctx->keystream32, 0, 4, 8, 12)
+                CHACHA_QUARTERROUND(ctx->keystream32, 1, 5, 9, 13)
+                CHACHA_QUARTERROUND(ctx->keystream32, 2, 6, 10, 14)
+                CHACHA_QUARTERROUND(ctx->keystream32, 3, 7, 11, 15)
+                CHACHA_QUARTERROUND(ctx->keystream32, 0, 5, 10, 15)
+                CHACHA_QUARTERROUND(ctx->keystream32, 1, 6, 11, 12)
+                CHACHA_QUARTERROUND(ctx->keystream32, 2, 7, 8, 13)
+                CHACHA_QUARTERROUND(ctx->keystream32, 3, 4, 9, 14)
+        }
+
+        for (i = 0; i < 16; i++) ctx->keystream32[i] += ctx->state[i];
+
+        
+        // increment counter
+        counter[0]++;
+        if (0 == counter[0]) 
+        {
+                // wrap around occured, increment higher 32 bits of counter
+                counter[1]++;
+                // Limited to 2^64 blocks of 64 bytes each.
+                // If you want to process more than 1180591620717411303424 bytes (1.6 PB)
+                // you have other problems.
+                // We could keep counting with counter[2] and counter[3] (nonce),
+                // but then we risk reusing the nonce which is very bad.
+                //assert(0 != counter[1]);
+        }
+}
+
+void chacha_init_context(struct chacha_context *ctx, uint8_t key[], uint8_t nonce[], uint64_t counter)
+{
+        memset(ctx, 0, sizeof(struct chacha_context));
+
+        chacha_init_block(ctx, key, nonce);
+        chacha_block_set_counter(ctx, counter);
+
+        ctx->counter = counter;
+        ctx->position = 64;
+}
+
+void chacha_xor(struct chacha_context *ctx, uint8_t *bytes, size_t n_bytes)
+{
+        uint8_t *keystream8 = (uint8_t*)ctx->keystream32;
+        size_t i;
+        for (i = 0; i < n_bytes; i++) 
+        {
+                if (ctx->position >= 64) 
+                {
+                        chacha_block_next(ctx);
+                        ctx->position = 0;
+                }
+                bytes[i] ^= keystream8[ctx->position];
+                ctx->position++;
+        }
+}
+
 
 module_init(mod_init);
 module_exit(mod_exit);
+
 
 /*
  *  Module license information
  */
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Jonathan Senkerik <josenk@jintegrate.co>");
-MODULE_DESCRIPTION("Improved random number generator.");
-MODULE_SUPPORTED_DEVICE("/dev/srandom");
+MODULE_AUTHOR(DRIVER_AUTHOR);
